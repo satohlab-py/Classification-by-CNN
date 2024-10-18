@@ -1,0 +1,64 @@
+import os
+from PIL import Image
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.widgets import Slider
+
+# 画像がグレースケールでなければグレースケール化
+def convert_to_grayscale(image):
+    if image.ndim == 3:  # RGB or RGBA
+        image = np.mean(image, axis=-1).astype(np.uint8)
+    return image
+
+# 輝度補正を行う関数
+def normalize_image(image, threshold=0.0025):
+    # 画像がグレースケールでなければグレースケール化
+    image = convert_to_grayscale(image)
+    
+    # ピクセルの輝度を取得
+    all_pixels = image.flatten()
+    # 平均輝度を計算
+    mean_intensity = np.mean(all_pixels)
+    
+    # 平均輝度がthreshold以下の場合は補正を行わない
+    if mean_intensity < threshold * 255:
+        return image
+    
+    # 一番低い輝度と99％の位置にあるピクセルの輝度を取得
+    min_intensity = np.min(all_pixels)
+    max_intensity_99 = np.percentile(all_pixels, 99)
+    # スケールを計算
+    scale = 255 / (max_intensity_99 - min_intensity)
+    # 正規化
+    normalized_image = (image - min_intensity) * scale
+    # 99パーセンタイル以上の輝度値を持つピクセルを255に設定
+    normalized_image[image > max_intensity_99] = 255
+    # 0から255の範囲にクリップ
+    normalized_image = np.clip(normalized_image, 0, 255)
+    return normalized_image.astype(np.uint8)
+
+# 正規化された画像を保存する関数
+def save_normalized_image(filename, image):
+    normalized_image = Image.fromarray(image)
+    normalized_image.save(filename)
+
+# カレントディレクトリの全てのJPEGファイルを処理する
+for filename in os.listdir():
+    if filename.lower().endswith('.jpeg') or filename.lower().endswith('.jpg'):
+        image = np.array(Image.open(filename))
+        normalized_image = normalize_image(image)
+        output_filename = f'normalized_{filename}'
+        save_normalized_image(output_filename, normalized_image)
+
+# スライダーを用いて画像を表示する関数
+def display_image(image):
+    fig, ax = plt.subplots()
+    plt.subplots_adjust(bottom=0.25)
+    l = plt.imshow(image, cmap='gray', vmin=0, vmax=255)
+    plt.show()
+
+# JPEG画像を一つ表示する（例として最初の画像を表示）
+first_image = [f for f in os.listdir() if f.lower().endswith('.jpeg') or f.lower().endswith('.jpg')][0]
+image = np.array(Image.open(first_image))
+normalized_image = normalize_image(image)
+display_image(normalized_image)
