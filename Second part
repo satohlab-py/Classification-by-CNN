@@ -1,0 +1,132 @@
+import os
+import numpy as np
+import cv2
+from sklearn.decomposition import PCA
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score
+import matplotlib.pyplot as plt
+import tensorflow as tf
+from tensorflow.keras.applications import ResNet50
+from tensorflow.keras.applications.resnet50 import preprocess_input
+from tensorflow.keras.models import Model
+
+# TensorFlowのログレベルを設定して警告を抑制
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2'
+
+# GPUがない場合はCPUを使用
+tf.config.set_visible_devices([], 'GPU')
+
+# カレントフォルダを指定
+folder_path = os.getcwd()
+
+# JPEGファイルを取得
+jpeg_files = [f for f in os.listdir(folder_path) if f.endswith('.jpeg') or f.endswith('.jpg')]
+
+# JPEGファイルが存在するか確認
+if len(jpeg_files) == 0:
+    raise FileNotFoundError("カレントフォルダにJPEGファイルが見つかりません。")
+
+# デバッグ用: ファイル名を出力
+print("Found JPEG files:", jpeg_files)
+
+# 事前学習済みのResNet50モデルをロード
+base_model = ResNet50(weights='imagenet', include_top=False, pooling='avg')
+
+# 事前学習済みのモデルの出力をGAPに設定
+model = Model(inputs=base_model.input, outputs=base_model.output)
+
+# 画像を読み込んでサイズを確認
+sample_image_path = os.path.join(folder_path, jpeg_files[0])
+print("Sample image path:", sample_image_path)
+
+# ファイルパスを正しくエンコードして読み込み
+with open(sample_image_path, 'rb') as f:
+    sample_image_data = f.read()
+sample_image = cv2.imdecode(np.frombuffer(sample_image_data, np.uint8), cv2.IMREAD_GRAYSCALE)
+
+# 画像が正しく読み込まれたか確認
+if sample_image is None:
+    raise ValueError(f"サンプル画像の読み込みに失敗しました。ファイルパス: {sample_image_path}")
+
+# 画像サイズをResNet50の入力サイズに合わせる
+img_height, img_width = 224, 224
+
+# 画像を読み込む関数
+def load_and_preprocess_images(folder):
+    images = []
+    image_names = []
+    for filename in os.listdir(folder):
+        if filename.endswith('.jpeg') or filename.endswith('.jpg'):
+            img_path = os.path.join(folder, filename)
+            print(f"Loading image: {img_path}")  # デバッグ用: 画像パスを出力
+            with open(img_path, 'rb') as f:
+                img_data = f.read()
+            img = cv2.imdecode(np.frombuffer(img_data, np.uint8), cv2.IMREAD_GRAYSCALE)
+            if img is not None:
+                print(f"Loaded image shape: {img.shape}")  # デバッグ用: 画像サイズを出力
+                img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
+                img = cv2.resize(img, (img_height, img_width))
+                img = preprocess_input(img)
+                images.append(img)
+                image_names.append(filename)
+            else:
+                print(f"読み込みに失敗した画像: {img_path}")
+    return np.array(images), image_names
+
+# 画像を読み込んで前処理
+images, image_names = load_and_preprocess_images(folder_path)
+
+# 画像が一つも読み込まれなかった場合のエラーチェック
+if len(images) == 0:
+    raise ValueError("有効な画像が一つも読み込まれませんでした。")
+
+# CNNを使用して特徴量を抽出
+features = model.predict(images)
+print("Extracted features shape:", features.shape)  # 特徴量の形状をデバッグ出力
+
+# PCAの次元数を設定して次元削減
+n_samples, n_features = features.shape
+n_components = min(n_samples, n_features)
+print("n_samples:", n_samples, "n_features:", n_features)  # サンプル数と特徴量数をデバッグ出力
+
+pca = PCA(n_components=2)  # 2次元に削減してプロット
+pca_result = pca.fit_transform(features)
+print("PCA result shape:", pca_result.shape)  # PCA結果の形状をデバッグ出力
+
+# PCA成分の分散説明率を取得
+explained_variance = pca.explained_variance_ratio_
+print("Explained variance ratio of PCA components:", explained_variance)
+
+# K-meansクラスタリングを適用
+n_clusters = 2  # クラスタ数を2に設定、ここを変更することでクラスタ数を変更可能
+kmeans = KMeans(n_clusters=n_clusters, n_init=10, random_state=42)
+clusters = kmeans.fit_predict(pca_result)
+silhouette_avg = silhouette_score(pca_result, clusters)
+print(f"Silhouette Score: {silhouette_avg}")
+
+# マーカーの設定
+markers = {
+    '13cm': 'o',  # 中抜き円
+    '18cm': '^',  # 中抜き三角
+    '22cm': 's',  # 中抜き四角
+}
+
+# PCA結果をプロット
+plt.figure(figsize=(8, 8))  # 正方形の図を作成
+
+for i, (x, y) in enumerate(pca_result):
+    filename = image_names[i]
+    for key in markers:
+        if key in filename:
+            plt.scatter(x, y, c=['tab:blue', 'tab:orange'][clusters[i]], marker=markers[key], edgecolors='k', facecolors='none')
+
+plt.title('PCA clustering of images (K-means)')
+plt.xlabel('PCA feature 1')
+plt.ylabel('PCA feature 2')
+plt.xlim(-80, 80)  # X軸の範囲を指定
+plt.ylim(-80, 80)  # Y軸の範囲を指定
+
+plt.gca().set_aspect('equal', adjustable='box')  # アスペクト比を1:1に設定
+
+plt.tight_layout()
+plt.show()
